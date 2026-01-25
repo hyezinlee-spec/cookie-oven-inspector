@@ -4,20 +4,19 @@ import numpy as np
 import easyocr
 import google.generativeai as genai
 
-# --- [1. Google AI API 키 설정 (Secrets 활용)] ---
-# Streamlit Secrets에 GEMINI_API_KEY가 반드시 등록되어 있어야 합니다.
+# --- [1. Google AI API 설정] ---
 try:
     if "GEMINI_API_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('models/gemini-1.5-flash')
     else:
-        st.error("❌ API 키가 설정되지 않았습니다. Streamlit Cloud 설정에서 GEMINI_API_KEY를 확인하세요.")
+        st.error("❌ API 키가 설정되지 않았습니다. Streamlit Cloud의 Secrets 설정을 확인하세요.")
         st.stop()
 except Exception as e:
     st.error(f"❌ API 연결 오류: {str(e)}")
     st.stop()
 
-# --- [2. 깃북 기반 통합 가이드 데이터 세팅] ---
+# --- [2. 가이드 데이터 세팅] ---
 ASSET_GUIDE = {
     "광고 목록화면": {"size": (720, 360), "kb": 200},
     "광고 상세화면": {"size": (720, 780), "kb": 400},
@@ -47,31 +46,31 @@ def check_bg_color(img):
             return f_hex
     return None
 
-def check_visual_elements(image):
-    prompt = """
-    너는 광고 소재 검수 전문가야. 이미지에서 다음 사항을 엄격히 확인해줘.
+def check_visual_ai(image, res_type):
+    # 소재 유형에 따른 맞춤형 AI 지시문
+    mockup_instruction = "단, '참여중 영역' 소재는 기기 목업이 포함되어도 괜찮아." if res_type == "참여중 영역" else "스마트폰 베젤, 홈버튼, 노치 등 기기 형태가 포함되면 무조건 YES로 보고해."
     
-    1. 디바이스 목업 (중요): 스마트폰 테두리, 홈버튼, 노치 등이 포함되었는가? 
-       배너 내 캐릭터 연출이나 단순 사각형 박스는 목업이 아님. 실제 기기 외곽선만 YES로 판단해.
-    2. 플랫폼 명칭: '웹툰 쿠키'나 '시리즈 쿠키' 대신 '쿠키'로 통일되어 있는가?
-    3. 저작권/가독성: 연예인 실사 포함 여부 및 배경색 대비 글자 선명도 확인.
+    prompt = f"""
+    너는 네이버웹툰 광고 검수 전문가야. 다음 사항을 엄격히 체크해줘:
+    1. 디바이스 목업: {mockup_instruction}
+    2. 플랫폼 명칭: '웹툰 쿠키'나 '시리즈 쿠키' 명칭이 보이면 '쿠키'로 통일하도록 지시해.
+    3. 가독성: 배경색 때문에 로고나 텍스트가 묻히는 곳이 있는가?
+    4. 저작권: 판매 상품 이미지나 인물 실사가 포함되어 저작권 확인이 필요한가?
 
-    형식:
+    응답 형식:
     [목업여부: YES/NO] 
-    [플랫폼명칭: PASS/FAIL]
-    분석 의견: 
+    [명칭여부: PASS/FAIL]
+    [상세 의견]: 
     """
-    try:
-        response = model.generate_content([prompt, image])
-        return response.text
-    except:
-        return "[목업여부: 확인불가] API 호출 오류"
+    response = model.generate_content([prompt, image])
+    return response.text
 
-# --- [4. Streamlit UI 및 메인 로직] ---
-st.set_page_config(page_title="쿠키오븐 통합 검수 v5.1", layout="wide")
-st.title("🍪 쿠키오븐 제작가이드 통합 검수 (v5.1)")
+# --- [4. UI 및 메인 로직] ---
+st.set_page_config(page_title="쿠키오븐 통합 검수 v5.4", layout="wide")
+st.title("🍪 쿠키오븐 제작가이드 통합 검수 (v5.4)")
+st.caption("디바이스 목업 사용 금지 및 소재별 체크리스트가 보강된 최종 버전입니다.")
 
-file = st.file_uploader("이미지 업로드", type=['png', 'jpg', 'jpeg'])
+file = st.file_uploader("검수할 이미지 업로드", type=['png', 'jpg', 'jpeg'])
 
 if file:
     img = Image.open(file)
@@ -79,7 +78,6 @@ if file:
     w, h = img.size
     kb = len(file.getvalue()) / 1024
     
-    # 유형 판별
     res_type = "미분류"
     for name, spec in ASSET_GUIDE.items():
         if spec['size'][1] == -1:
@@ -89,13 +87,13 @@ if file:
 
     col1, col2 = st.columns(2)
     with col1:
-        st.image(img, use_container_width=True, caption=f"분석 대상: {res_type} ({w}x{h}px)")
+        st.image(img, use_container_width=True, caption=f"분석 대상: {res_type}")
 
     with col2:
         st.subheader(f"📊 검수 리포트: {res_type}")
         errors, passes, special_notices = [], [], []
 
-        # --- A. 규격 및 용량 검수 ---
+        # --- A. 규격 및 용량 ---
         if res_type in ASSET_GUIDE:
             st.write(f"✔️ **이미지 규격 일치** ({w}x{h}px)")
             limit_kb = ASSET_GUIDE[res_type]['kb']
@@ -105,53 +103,70 @@ if file:
             else:
                 errors.append(f"용량 초과: 현재 {kb:.1f}KB (기준 {limit_kb}KB 이하)")
         else:
-            errors.append(f"규격 위반: {w}x{h}px은 가이드에 정의된 표준 규격이 아닙니다.")
+            errors.append(f"규격 위반: {w}x{h}px은 표준 규격이 아닙니다.")
 
-        # --- B. 배경색 검수 ---
+        # --- B. 배경색 규정 ---
         bad_bg = check_bg_color(img)
-        if bad_bg: errors.append(f"배경색 위반: 금지된 단색 배경({bad_bg}) 감지")
-        else: passes.append("배경색 규정 준수")
+        if bad_bg:
+            errors.append(f"배경색 위반: 금지된 단색 배경({bad_bg}) 감지")
+        else:
+            passes.append("배경색 규정 준수")
 
-        # --- C. 지능형 시각 및 텍스트 검수 ---
-        with st.spinner("AI가 이미지를 정밀 분석 중입니다..."):
-            ai_opinion = check_visual_elements(img)
+        # --- C. AI 및 OCR 분석 ---
+        with st.spinner("AI가 시각 요소 및 텍스트를 분석 중입니다..."):
+            ai_opinion = check_visual_ai(img, res_type)
             reader = easyocr.Reader(['ko','en'])
             ocr_res = reader.readtext(img_np, detail=0)
             full_txt = "".join(ocr_res).replace(" ", "")
 
-        if "[목업여부: YES]" in ai_opinion:
-            errors.append(f"🚨 **디바이스 목업 감지:** 기기 외곽선이 발견되었습니다.")
-        if "[플랫폼명칭: FAIL]" in ai_opinion:
-            special_notices.append("⚠️ **명칭 통일 권장:** '쿠키'로 표기하세요.")
+        if "[목업여부: YES]" in ai_opinion and res_type != "참여중 영역":
+            errors.append("🚨 **디바이스 목업 감지:** 기기 외곽선(베젤, 노치 등)이 발견되었습니다.")
+        
+        if "[명칭여부: FAIL]" in ai_opinion or "웹툰쿠키" in full_txt or "시리즈쿠키" in full_txt:
+            special_notices.append("⚠️ **명칭 통일 권장:** '웹툰/시리즈 쿠키' 대신 **'쿠키'**로 통일하세요.")
 
-        if any(bad in full_txt for bad in ['포인트', '캐시', '리워드', '혜택']):
-            errors.append("🚨 명칭 위반: 반드시 '쿠키'로 기재 (포인트/캐시 등 감지)")
         if any(ban in full_txt for ban in BAN_WORDS):
-            errors.append("🚨 금지 문구: '설치/실행' 등 사용 불가")
-
-        if "쇼핑" in full_txt: special_notices.append("🛒 **네이버쇼핑 CPS 감지:** 상하 40/42px, 좌우 44px 여백 확인")
-        if "LIVE" in full_txt: special_notices.append("📺 **라이브 방송 감지:** 상단 38px, 하단 32px, 양측 36px 여백 확인")
+            errors.append("🚨 **금지 문구:** '설치/실행' 등 문구 사용 불가")
 
         # --- 결과 출력 ---
         st.divider()
         if not errors:
-            st.success("🎉 가이드 준수! 수정 권고 사항이 없습니다.")
+            st.success("🎉 기본 수치 및 정책 검사 통과!")
             st.balloons()
         else:
-            st.error("🚨 수정이 필요한 항목이 있습니다.")
-            for err in errors: st.write(f"- {err}")
+            for err in errors: st.error(err)
         
         if special_notices:
-            st.info("💡 **알림 사항**")
-            for notice in special_notices: st.write(notice)
+            for notice in special_notices: st.info(notice)
         
-        with st.expander("✅ 합격 항목 상세"):
-            for p in passes: st.write(f"✔️ {p}")
+        st.info(f"💡 **AI 분석 의견:**\n{ai_opinion}")
 
-    # --- [5. 소재별 가변형 사이드바] ---
+    # --- [5. 소재별 동적 사이드바] ---
     with st.sidebar:
-        st.markdown("### 📝 수동 확인 리스트")
-        st.write("📍 심의필 위치 및 여백 확인 (하단 22px, 우측 36px)")
-        st.write("📍 원본 **PSD 파일** 동봉 여부")
-        if res_type == "광고 목록화면": st.info("🍪 쿠키 아이콘 여백: 하단 22px, 우측 30px")
-        if res_type == "참여중 영역": st.success("📱 앱 마켓 로고 사용 권장")
+        st.header("📝 소재별 체크리스트")
+        
+        # 공통 항목 (3, 4, 8, 9, 10번 반영)
+        st.write("📍 **[공통]** 심의필 위치 및 여백 확인 (우하단)")
+        st.write("📍 **[공통]** 원본 **PSD 파일** 제출 필수")
+        st.write("📍 **[공통]** 배경색 대비 로고/텍스트 가독성 확인")
+        st.write("📍 **[공통]** 저작권/초상권 확보 이미지 사용 여부")
+        
+        # 1번: 목업 사용 금지 (참여중 영역 제외 모든 상품)
+        if res_type != "참여중 영역" and res_type != "미분류":
+            st.warning("🚫 **디바이스 목업 사용 금지:** 스마트폰 베젤, 홈버튼 등이 포함되지 않았나요?")
+        
+        # 2번: 광고 목록화면 전용
+        if res_type == "광고 목록화면":
+            st.info("🍪 **쿠키 아이콘 여백:** 하단 22px, 우측 30px 준수")
+
+        # 5번: 참여중 영역 전용
+        if res_type == "참여중 영역":
+            st.success("📱 **참여중 영역:** 앱 마켓 로고 사용 권장")
+            st.write("✔️ 이 유형은 기기 목업 사용이 허용됩니다.")
+
+        # 6번: 상세 화면 설명 전용
+        if res_type == "상세 화면 설명":
+            st.markdown("---")
+            st.subheader("🔍 상세 설명 이미지 전용")
+            st.write("- 나눔고딕 폰트 / PNG 형식 준수")
+            st.write("- 라이트/다크모드 2종 필수 제작")
