@@ -68,7 +68,7 @@ def check_visual_ai(image, res_type):
         return response.text
     except Exception:
         # 에러(용량 초과 등)가 나면 아래 문구를 파란 상자에 띄움
-        return "⚠️ 현재 AI 검수 사용량이 많아 분석이 지연되고 있습니다.  \n사이드바의 수동 체크리스트를 통해 검수를 진행해 주세요."
+        return "⚠️ 현재 AI 검수 사용량이 많아 심층분석이 지연되고 있습니다. **사이드바의 수동 체크리스트**를 확인해 주세요."
 
 # --- [4. UI 및 메인 로직] ---
 st.set_page_config(page_title="쿠키오븐 통합 검수 v5.9", layout="wide")
