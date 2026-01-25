@@ -1,62 +1,86 @@
 import streamlit as st
 from PIL import Image
 import numpy as np
+import cv2  # 시각 분석용 라이브러리 추가
+import easyocr
 
-# --- 5개 PDF 가이드라인 기반 통합 데이터 세팅 ---
-FULL_GUIDE = {
-    "광고 목록화면": {"size": (720, 360), "limit_kb": 200, "desc": "가이드 4~5p 참조"},
-    "광고 상세화면": {"size": (720, 780), "limit_kb": 400, "desc": "가이드 9~10p 참조"},
-    "영상형 띠배너": {"size": (720, 210), "limit_kb": 200, "desc": "가이드 2p 참조"},
-    "2차 팝업": {"size": (720, 360), "limit_kb": 200, "desc": "가이드 25p 참조 (텍스트 150자 이내)"},
-    "상세 이벤트 이미지": {"size": (720, "variable"), "limit_kb": 1000, "desc": "가이드 5~6p 참조, 세로 길이는 가변"},
-    "참여중 영역": {"size": (144, 144), "limit_kb": 100, "desc": "가이드 19p 참조"},
-    "아이콘형 소재": {"size": (120, 120), "limit_kb": 50, "desc": "가이드 21p 참조"}
-}
+# --- 가이드 데이터 세팅 ---
+FORBIDDEN_COLORS = ["#fefefe", "#f6f6f6", "#000000", "#f7f7f7"]
+BAN_WORDS = ['설치', '다운로드', '다운', '실행']
 
-# 검수 로직 함수 보강
-def check_dimensions(w, h):
-    for name, spec in FULL_GUIDE.items():
-        target_w = spec['size'][0]
-        target_h = spec['size'][1]
-        
-        # 가변 세로형 처리 (상세 이벤트 등)
-        if target_h == "variable":
-            if w == target_w: return name
-        # 일반 정규 규격 처리
-        elif (w, h) == (target_w, target_h):
-            return name
-    return "미분류/규격외 소재"
+def hex_to_rgb(value):
+    value = value.lstrip('#')
+    return tuple(int(value[i:i+2], 16) for i in (0, 2, 4))
 
-# --- Streamlit UI 부분 ---
-st.title("🍪 쿠키오븐 통합 소재 검수 (v1.1)")
-st.caption("5개의 PDF 가이드라인(멀티미션, 상세이벤트, 팝업 등)이 모두 통합된 버전입니다.")
+def check_mockup(img_np):
+    """이미지 내에 스마트폰 형태(목업)가 있는지 윤곽선 분석"""
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in contours:
+        approx = cv2.approxPolyDP(cnt, 0.02 * cv2.arcLength(cnt, True), True)
+        if len(approx) == 4: # 사각형 형태 감지
+            x, y, w, h = cv2.boundingRect(cnt)
+            ratio = float(w)/h
+            if 0.4 < ratio < 0.6: # 스마트폰 비율과 유사할 경우
+                return True
+    return False
 
-uploaded_file = st.file_uploader("이미지 업로드", type=['png', 'jpg'])
+def check_background_color(image):
+    """이미지 외곽 테두리 색상이 금지된 단색 배경인지 체크"""
+    img_np = np.array(image.convert('RGB'))
+    edges_pixels = np.concatenate([img_np[0, :], img_np[-1, :], img_np[:, 0], img_np[:, -1]])
+    avg_color = np.mean(edges_pixels, axis=0)
+    
+    for f_color in FORBIDDEN_COLORS:
+        target_rgb = hex_to_rgb(f_color)
+        if np.all(np.abs(avg_color - target_rgb) < 10): # 오차범위 10 이내
+            return f_color
+    return None
+
+# --- UI 및 메인 로직 ---
+st.title("🍪 쿠키오븐 정밀 소재 검수 (v3.1)")
+uploaded_file = st.file_uploader("검수할 소재 업로드", type=['png', 'jpg'])
 
 if uploaded_file:
     img = Image.open(uploaded_file)
-    w, h = img.size
-    kb = len(uploaded_file.getvalue()) / 1024
+    img_np = np.array(img.convert('RGB'))
     
-    res_type = check_dimensions(w, h)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.image(img, use_container_width=True)
     
-    st.subheader(f"📊 판별 결과: {res_type}")
-    
-    # 1. 규격/용량 검사
-    if res_type in FULL_GUIDE:
-        spec = FULL_GUIDE[res_type]
-        st.write(f"📍 **참조 가이드:** {spec['desc']}")
+    with col2:
+        errors = []
         
-        if kb > spec['limit_kb']:
-            st.error(f"❌ 용량 초과: {kb:.1f}KB (기준: {spec['limit_kb']}KB)")
+        # 1. 배경색 체크 
+        bad_bg = check_background_color(img)
+        if bad_bg:
+            errors.append(f"🚨 **배경색 위반:** 금지된 단색 배경({bad_bg})이 감지되었습니다. 그라데이션이나 디자인 요소를 추가하세요.")
+        
+        # 2. 목업 이미지 체크 [cite: 69, 188]
+        if check_mockup(img_np):
+            errors.append("🚨 **디바이스 목업 감지:** 이미지 내 스마트폰 베젤이나 목업 형태가 보입니다. 제거 후 원본 이미지만 사용하세요.")
+        
+        # 3. 텍스트 및 명칭 체크 [cite: 66, 73, 185, 192]
+        reader = easyocr.Reader(['ko','en'])
+        ocr_result = reader.readtext(img_np, detail=0)
+        full_text = " ".join(ocr_result)
+        
+        if any(bad in full_text for bad in ['포인트', '캐시', '리워드']):
+            errors.append("🚨 **명칭 위반:** '포인트/캐시' 명칭이 발견되었습니다. 반드시 **'쿠키'**로 수정하세요.")
+            
+        if any(ban in full_text for ban in BAN_WORDS):
+            errors.append("🚨 **금지 문구:** '설치/다운로드' 등의 문구는 사용 불가합니다. **'접속하기'**로 수정하세요.")
+
+        if not errors:
+            st.success("✅ 모든 정밀 검수(색상, 목업, 문구)를 통과했습니다!")
+            st.balloons()
         else:
-            st.success(f"✅ 용량 통과: {kb:.1f}KB")
-    else:
-        st.warning("⚠️ 규격 불일치: 쿠키오븐 표준 규격이 아닙니다. PDF 가이드를 다시 확인하세요.")
+            for err in errors:
+                st.error(err)
 
-    # [중요] 상세 이벤트 이미지 전용 안내
-    if "상세 이벤트" in res_type:
-        st.info("💡 상세 이벤트 이미지는 가로 720px 고정, 세로는 가변입니다. 디자인 요소 중복 여부를 수동 확인하세요.")
-
-    # 2. 텍스트/안전영역 검수 (이전 OCR 로직과 결합)
-    # ... (OCR 관련 코드는 이전 답변과 동일하게 유지)
+    with st.expander("📝 검수 가이드 확인 (Gitbook)"):
+        st.write("- **배경 금지:** #fefefe, #f6f6f6, #000000, #f7f7f7 ")
+        st.write("- **리워드:** 무조건 '쿠키' 표기 [cite: 73, 192]")
+        st.write("- **기기:** 디바이스 목업 사용 불가 [cite: 69, 188]")
